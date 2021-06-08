@@ -1,0 +1,287 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template deploys the necessary AWS Resources inorder to automate sharing the manual snapshots periodically to the destination AWS account.
+
+Parameters:
+
+  Platform:
+    Description: Application Name for tagging purpose.
+    Type: String
+
+  InstanceNamePattern:
+    Type: String
+    Default: ALL_INSTANCES
+    Description: Python regex for matching cluster identifiers to backup. Use "ALL_INSTANCES" to back up every RDS instance in the region.
+
+  DestinationAccount:
+    Type: Number
+    Default: '000000000000'
+    Description: Destination account with no dashes.
+
+  ShareSnapshots:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+    - 'true'
+    - 'false'
+
+  ShareSchedule:
+    Type: String
+
+  LogLevel:
+    Type: String
+    Default: ERROR
+    Description: Log level for Lambda functions (DEBUG, INFO, WARN, ERROR, CRITICAL are valid values).
+
+  LambdaCWLogRetention:
+    Type: Number
+    Default: '7'
+    Description: Number of days to retain logs from the lambda functions in CloudWatch Logs
+
+  SourceRegionOverride:
+    Type: String
+    Default: 'NO'
+    Description: Set to the region where your RDS instances run, only if such region does not support Step Functions. Leave as NO otherwise
+
+  ParentSNSStack:
+    Description: SNS Topic ARN to send notifications to
+    Type: String
+
+Conditions:
+
+  Share:
+    Fn::Equals:
+    - Ref: ShareSnapshots
+    - 'true'
+
+Resources:
+
+# CloudWatch Alarms Resources for Step Functions
+
+  alarmcwShareFailed:
+    Condition: Share
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: !Sub "Alarm to be triggered if the Share Step Function has failed for the ${Platform} RDS"
+      ActionsEnabled: 'true'
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: '2'
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Period: '3600'
+      Statistic: Sum
+      Threshold: '2.0'
+      AlarmActions:
+        - 'Fn::ImportValue': !Sub '${ParentSNSStack}-AlertsTopicArn'
+      Dimensions:
+      - Name: StateMachineArn
+        Value:
+          Ref: statemachineShareSnapshotsRDS
+
+# Lamabda Resources
+
+# Lambda Execution IAM Role
+
+  iamroleSnapshotsRDS:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: inline_policy_snapshots_rds_cw_logs
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+      - PolicyName: inline_policy_snapshots_rds
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - rds:CreateDBSnapshot
+            - rds:DeleteDBSnapshot
+            - rds:DescribeDBInstances
+            - rds:DescribeDBSnapshots
+            - rds:ModifyDBSnapshotAttribute
+            - rds:DescribeDBSnapshotAttributes
+            - rds:ListTagsForResource
+            - rds:AddTagsToResource
+            Resource: "*"
+
+# Lambda Functions
+
+  lambdaShareSnapshotsRDS:
+    Type: AWS::Lambda::Function
+    Condition: Share
+    Properties:
+      Code:
+        S3Bucket: {{ sceptre_user_data.Code.S3Bucket }}
+        S3Key: {{ sceptre_user_data.Code.S3Key }}
+      MemorySize: 512
+      Description: "This function shares snapshots created by the take_snapshots_rds function with DEST_ACCOUNT specified in the environment variables"
+      Environment:
+        Variables:
+          DEST_ACCOUNT:
+            Ref: DestinationAccount
+          LOG_LEVEL:
+            Ref: LogLevel
+          PATTERN:
+            Ref: InstanceNamePattern
+          REGION_OVERRIDE:
+            Ref: SourceRegionOverride
+          PLATFORM:
+            Ref: Platform  
+      Role:
+        Fn::GetAtt:
+        - iamroleSnapshotsRDS
+        - Arn
+      Runtime: python3.7
+      Handler: lambda_function.lambda_handler
+      Timeout: 300
+
+# Lambda Functions CloudWatch Log Groups
+
+  cwloggrouplambdaShareSnapshotsRDS:
+    Condition: Share
+    Type: AWS::Logs::LogGroup
+    Description: "Log group for the lambdaShareSnapshotsRDS function logs"
+    DependsOn: lambdaShareSnapshotsRDS
+    Properties:
+      RetentionInDays:
+        Ref: LambdaCWLogRetention
+      LogGroupName:
+        Fn::Sub:
+        - "/aws/lambda/${func}"
+        - func:
+            Ref: lambdaShareSnapshotsRDS
+
+# Step Functions Resources
+
+# Step Functin Execution Role
+
+  iamroleStateExecution:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              Fn::Join:
+              - ''
+              - - states.
+                - Ref: AWS::Region
+                - ".amazonaws.com"
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: inline_policy_snapshots_rds
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            Resource: "*"
+
+# Step Functions
+
+  statemachineShareSnapshotsRDS:
+    Type: AWS::StepFunctions::StateMachine
+    Condition: Share
+    Properties:
+      DefinitionString:
+        Fn::Join:
+        - ''
+        - - Fn::Join:
+            - "\n"
+            - - ' {"Comment":"Shares snapshots with DEST_ACCOUNT",'
+              - ' "StartAt":"ShareSnapshots",'
+              - ' "States":{'
+              - '   "ShareSnapshots":{'
+              - '     "Type":"Task",'
+              - '     "Resource": '
+          - "\""
+          - Fn::GetAtt:
+            - lambdaShareSnapshotsRDS
+            - Arn
+          - |-
+            "
+            ,
+          - Fn::Join:
+            - "\n"
+            - - '     "Retry":['
+              - "       {"
+              - '       "ErrorEquals":[ '
+              - '         "SnapshotToolException"'
+              - "       ],"
+              - '       "IntervalSeconds":300,'
+              - '       "MaxAttempts":3,'
+              - '       "BackoffRate":1'
+              - "     },"
+              - "     {"
+              - '      "ErrorEquals":[ '
+              - '         "States.ALL"], '
+              - '         "IntervalSeconds": 30,'
+              - '         "MaxAttempts": 20,'
+              - '         "BackoffRate": 1'
+              - "     }"
+              - "    ],"
+              - '    "End": true '
+              - "   }"
+              - " }}"
+      RoleArn:
+        Fn::GetAtt:
+        - iamroleStateExecution
+        - Arn
+
+# Step Function IAM Role for CloudWatch Events
+
+  iamroleStepInvocation:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: events.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: inline_policy_state_invocation
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - states:StartExecution
+            Resource: "*"
+
+# CloudWatch Events Rule for triggering the Step Function
+
+  cwEventShareSnapshotsRDS:
+    Type: AWS::Events::Rule
+    Condition: Share
+    Properties:
+      Description: !Sub "Triggers the ShareSnapshotsRDS state machine for ${Platform} RDS instance"
+      ScheduleExpression: !Sub "rate(${ShareSchedule} minutes)"
+      State: ENABLED
+      Targets:
+      - Arn:
+          Ref: statemachineShareSnapshotsRDS
+        Id: Target1
+        RoleArn:
+          Fn::GetAtt:
+          - iamroleStepInvocation
+          - Arn

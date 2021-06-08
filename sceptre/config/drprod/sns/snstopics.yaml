@@ -1,0 +1,4 @@
+template_path: sns/sns-topics.template.yaml
+
+parameters:
+  AlertsEmail: abc@xyz.com    ## <PASS A VALID EMAIL ADDRESS HERE>

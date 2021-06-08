@@ -1,0 +1,15 @@
+template_path: storage/aws-foundation-s3-encrypted.template.yaml
+
+hooks:
+  before_delete:
+  ## This before hook command is set to empty the bucket to let the CloudFormation to delete this stack successfully.
+    - !cmd aws s3 rm s3://sceptre-functions-prod-{{ stack_group_config.region_common_name }} --recursive --region {{ stack_group_config.region }}
+   ## If enabling version (either Enabled/Suspended), the above command will place delete marker on all the deleted objects. Uncomment the below command to delete the delete markers in-order for the CloudFormation to delete the bucket successfully.
+   # - !cmd aws s3api delete-objects --region {{ stack_group_config.region }} --bucket sceptre-functions-prod-{{ stack_group_config.region_common_name }} --delete "$(aws --profile $PROFILE s3api list-object-versions --region {{ stack_group_config.region }} --bucket sceptre-functions-prod-{{ stack_group_config.region_common_name }} --output=json --query='{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')"
+
+parameters:
+  BucketDuty: sceptre-functions-prod
+  BucketEncryptionEnabled: 'true'
+  NeedVersioning: 'false'
+  BucketVersioningEnabled: Suspended
+  ExpireObjects: 'false'

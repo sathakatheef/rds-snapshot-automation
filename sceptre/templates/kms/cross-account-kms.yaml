@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: The AWS::KMS::Key resource specifies a symmetric customer master key (CMK) in AWS Key Management Service (AWS KMS). AWS KMS does not currently support creating asymmetric CMKs and AWS default keys with a CloudFormation template.
+
+Parameters:
+
+  AllowedPrincipalsForAdmin:
+    Type: CommaDelimitedList
+    Description: List of Principals allowed to access for administrating this key
+
+  AllowedPrincipalsForKeyUsage:
+    Type: CommaDelimitedList
+    Description: List of Principals allowed to access for key usage
+
+  AllowedPrincipalsForGrants:
+    Type: String
+    Description: List of Principals allowed to access for administrating this key
+    Default: '' 
+
+  DisplayName:
+    Description: Specifies the display name of the key
+    Type: String
+
+  ParentSNSStack:
+    Description: SNS Topic ARN to send notifications to
+    Type: String
+    Default: ''  
+
+Conditions:
+
+  HasAlertTopic: !Not [!Equals [!Ref ParentSNSStack, '']]
+  RequireGrantPermission: !Not [!Equals [!Ref AllowedPrincipalsForGrants, '']]
+
+Resources:
+  
+  CustomerKey:
+    DeletionPolicy : Delete
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Symmetric Key used for encrypting RDS Snapshots to share between cross accounts and the key also leaves permission for the target account.
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: key-policy
+        Statement:
+        - Sid: Allow administration of the key
+          Effect: Allow
+          Principal: 
+            AWS: !Ref AllowedPrincipalsForAdmin
+          Action:
+          - kms:*
+          Resource: '*'
+        - Sid: Allow use of the key
+          Effect: Allow
+          Principal: 
+            AWS: !Ref AllowedPrincipalsForKeyUsage
+          Action:
+          - kms:DescribeKey
+          - kms:Encrypt
+          - kms:Decrypt
+          - kms:ReEncrypt*
+          - kms:GenerateDataKey
+          - kms:DescribeKey
+          Resource: '*'
+        - !If  
+          - RequireGrantPermission
+          - Sid: Allow attachment of persistent resources
+            Effect: Allow
+            Principal:
+              AWS:
+                !Split [ "," , !Ref AllowedPrincipalsForGrants]
+            Action:
+            - kms:CreateGrant
+            - kms:ListGrants
+            - kms:RevokeGrant
+            Resource: "*"
+            Condition:
+              Bool:
+                kms:GrantIsForAWSResource: 'true'
+          - !Ref 'AWS::NoValue'  
+
+  CustomerKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties: 
+      AliasName: !Sub "alias/${DisplayName}"
+      TargetKeyId: !Ref CustomerKey
+
+  KeyDeletionNotification:
+    Condition: HasAlertTopic
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Monitoring the state of the AWS CMK Key ${CustomerKey}"
+      EventPattern:
+        source:
+        - 'aws.kms'
+        'detail-type':
+        - 'AWS API Call via CloudTrail'
+        resources:
+        - !GetAtt CustomerKey.Arn
+        detail:
+          eventSource:
+          - 'kms.amazonaws.com'
+          'eventName':
+          - ScheduleKeyDeletion
+          - DisableKey
+      State: ENABLED
+      Targets:
+      - Arn: {'Fn::ImportValue': !Sub '${ParentSNSStack}-AlertsTopicArn'}
+        Id: KeyDeletionNotification
+
+Outputs:
+  KeyArn:
+    Description: ARN of the key provisioned
+    Value: !GetAtt CustomerKey.Arn
+
+  KeyAlias:
+    Description: Display Name of the key provisioned
+    Value: !Ref CustomerKeyAlias

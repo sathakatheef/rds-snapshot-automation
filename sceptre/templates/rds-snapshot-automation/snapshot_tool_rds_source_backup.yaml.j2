@@ -1,0 +1,278 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template deploys the necessary AWS Resources inorder to automate taking manual snapshots periodically from the targeted source RDS instances.
+
+Parameters:
+
+  Platform:
+    Description: Application Name for tagging purpose.
+    Type: String
+
+  InstanceNamePattern:
+    Type: String
+    Default: ALL_INSTANCES
+    Description: Python regex for matching cluster identifiers to backup. Use "ALL_INSTANCES" to back up every RDS instance in the region.
+
+  BackupInterval:
+    Type: Number
+    Default: '24'
+    Description: Interval for backups in hours. Default is 24
+
+  BackupSchedule:
+    Type: String
+
+  LogLevel:
+    Type: String
+    Default: ERROR
+    Description: Log level for Lambda functions (DEBUG, INFO, WARN, ERROR, CRITICAL are valid values).
+
+  LambdaCWLogRetention:
+    Type: Number
+    Default: '7'
+    Description: Number of days to retain logs from the lambda functions in CloudWatch Logs
+
+  SourceRegionOverride:
+    Type: String
+    Default: 'NO'
+    Description: Set to the region where your RDS instances run, only if such region does not support Step Functions. Leave as NO otherwise
+
+  TaggedInstance:
+    Type: String
+    Default: 'FALSE'
+    Description: Set to TRUE to filter instances that have tag CopyDBSnapshot set to True. Set to FALSE to disable
+    AllowedValues:
+    - 'TRUE'
+    - 'FALSE'
+
+  ParentSNSStack:
+    Description: SNS Topic ARN to send notifications to
+    Type: String
+
+Resources:
+
+# CloudWatch Alarms Resources for Step Functions
+
+  alarmcwBackupsFailed:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: !Sub "Alarm to be triggered if the Backup Step Function has failed for the ${Platform} RDS"
+      ActionsEnabled: 'true'
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: '1'
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Period: '300'
+      Statistic: Sum
+      Threshold: '1.0'
+      AlarmActions:
+        - 'Fn::ImportValue': !Sub '${ParentSNSStack}-AlertsTopicArn'
+      Dimensions:
+      - Name: StateMachineArn
+        Value:
+          Ref: stateMachineTakeSnapshotsRDS
+
+# Lamabda Resources
+
+# Lambda Execution IAM Role
+
+  iamroleSnapshotsRDS:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: inline_policy_snapshots_rds_cw_logs
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+      - PolicyName: inline_policy_snapshots_rds
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - rds:CreateDBSnapshot
+            - rds:DeleteDBSnapshot
+            - rds:DescribeDBInstances
+            - rds:DescribeDBSnapshots
+            - rds:ModifyDBSnapshotAttribute
+            - rds:DescribeDBSnapshotAttributes
+            - rds:ListTagsForResource
+            - rds:AddTagsToResource
+            Resource: "*"
+
+# Lambda Functions
+
+  lambdaTakeSnapshotsRDS:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: {{ sceptre_user_data.Code.S3Bucket }}
+        S3Key: {{ sceptre_user_data.Code.S3Key }}
+      MemorySize: 512
+      Description: "This functions triggers snapshots creation for RDS instances. It checks for existing snapshots following the pattern and interval specified in the environment variables with the following format: <dbinstancename>-YYYY-MM-DD-HH-MM."
+      Environment:
+        Variables:
+          INTERVAL:
+            Ref: BackupInterval
+          PATTERN:
+            Ref: InstanceNamePattern
+          LOG_LEVEL:
+            Ref: LogLevel
+          REGION_OVERRIDE:
+            Ref: SourceRegionOverride
+          TAGGEDINSTANCE:
+            Ref: TaggedInstance
+          PLATFORM:
+            Ref: Platform
+      Role:
+        Fn::GetAtt:
+        - iamroleSnapshotsRDS
+        - Arn
+      Runtime: python3.7
+      Handler: lambda_function.lambda_handler
+      Timeout: 300
+
+# Lambda Functions CloudWatch Log Groups
+
+  cwloggrouplambdaTakeSnapshotsRDS:
+    Type: AWS::Logs::LogGroup
+    Description: "Log group for the lambdaTakeSnapshotsRDS function logs"
+    DependsOn: lambdaTakeSnapshotsRDS
+    Properties:
+      RetentionInDays:
+        Ref: LambdaCWLogRetention
+      LogGroupName:
+        Fn::Sub:
+        - "/aws/lambda/${func}"
+        - func:
+            Ref: lambdaTakeSnapshotsRDS
+
+# Step Functions Resources
+
+# Step Functin Execution Role
+
+  iamroleStateExecution:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              Fn::Join:
+              - ''
+              - - states.
+                - Ref: AWS::Region
+                - ".amazonaws.com"
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: inline_policy_snapshots_rds
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            Resource: "*"
+
+# Step Functions
+
+  stateMachineTakeSnapshotsRDS:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      DefinitionString:
+        Fn::Join:
+        - ''
+        - - Fn::Join:
+            - "\n"
+            - - ' {"Comment":"Triggers snapshot backup for RDS instances",'
+              - ' "StartAt":"TakeSnapshots",'
+              - ' "States":{'
+              - '   "TakeSnapshots":{'
+              - '     "Type":"Task",'
+              - '     "Resource": '
+          - "\""
+          - Fn::GetAtt:
+            - lambdaTakeSnapshotsRDS
+            - Arn
+          - |-
+            "
+            ,
+          - Fn::Join:
+            - "\n"
+            - - '     "Retry":['
+              - "       {"
+              - '       "ErrorEquals":[ '
+              - '         "SnapshotToolException"'
+              - "       ],"
+              - '       "IntervalSeconds":300,'
+              - '       "MaxAttempts":20,'
+              - '       "BackoffRate":1'
+              - "     },"
+              - "     {"
+              - '      "ErrorEquals":[ '
+              - '         "States.ALL"], '
+              - '         "IntervalSeconds": 30,'
+              - '         "MaxAttempts": 20,'
+              - '         "BackoffRate": 1'
+              - "     }"
+              - "    ],"
+              - '    "End": true '
+              - "   }"
+              - " }}"
+      RoleArn:
+        Fn::GetAtt:
+        - iamroleStateExecution
+        - Arn
+
+# Step Function IAM Role for CloudWatch Events
+
+  iamroleStepInvocation:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: events.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: inline_policy_state_invocation
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - states:StartExecution
+            Resource: "*"
+
+# CloudWatch Events Rule for triggering the Step Function
+
+  cwEventBackupRDS:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Triggers the TakeSnapshotsRDS state machine for ${Platform} RDS instance"
+      ScheduleExpression: !Sub "rate(${BackupSchedule} minutes)"
+      State: ENABLED
+      Targets:
+      - Arn:
+          Ref: stateMachineTakeSnapshotsRDS
+        Id: Target1
+        RoleArn:
+          Fn::GetAtt:
+          - iamroleStepInvocation
+          - Arn

@@ -1,0 +1,8 @@
+## This config file file holds all common configurations to be passed to this environment and to this AWS account.
+
+profile: "prod"            ## The name of the profile as defined in ~/.aws/config and ~/.aws/credentials. <PASS THE NAME FOR THE SOURCE ACCOUNT AWS PROFILE TO BE CONFIGURED ON THE CLI WHICH IS TO BE USED WHEN PROVISIONING THE RESOURCES ON THIS ACCOUNT>. https://sceptre.cloudreach.com/2.3.0/docs/stack_group_config.html#profile
+
+stack_tags:                    ## A dictionary of CloudFormation Tags to be applied to the Stack. <PASS SUFFICIENT TAGS TO BE ATTACHED ON THE CLOUDFORMATION STACK>. https://sceptre.cloudreach.com/2.3.0/docs/stack_config.html#stack-tags
+  sceptre_managed: "true"
+  environment: "production"
+  purpose: "production"

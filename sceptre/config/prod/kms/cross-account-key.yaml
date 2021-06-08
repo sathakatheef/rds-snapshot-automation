@@ -1,0 +1,13 @@
+template_path: kms/cross-account-kms.yaml
+
+parameters:
+  AllowedPrincipalsForAdmin:
+    - "arn:aws:iam::1234567890:role/example_rolename"  ## <PASS LIST OF IAM ROLE ARNS THAT WILL BE THE ADMINISTRATORS OF THE KEY>
+  AllowedPrincipalsForKeyUsage:
+   - "1234567890" ## <PASS DR ACCOUNT ID HERE>
+   - "0987654321" ## <OPTIONAL TO PASS SOURCE ACCOUNT ID HERE IN ORDER TO LET THE SOURCE ACCOUNT TO USE THE KEY>
+   - "arn:aws:iam::1234567890:user/provisioning_user" ## <ARN of the IAM USER OR ROLE WHO IS PROVISONING THIS KEY, THIS IS TO AVOID CLOUDFORMATION THROWING THIS ERROR "Resource handler returned message: "The new key policy will not allow you to update the key policy in the future."">
+   - "arn:aws:iam::123456789:role/example_rolename"  ## <PASS LIST OF IAM ROLE ARNS THAT WILL BE THE ADMINISTRATORS OF THE KEY>
+  AllowedPrincipalsForGrants: "arn:aws:iam::1234567890:role/example_rolename,9876543210"  ## <PASS COMMA SEPERATED LIST OF PRINCIPALS (IAM ROLE ARNS OR ACCOUNT ID) THAT WILL BE THE ADMINISTRATORS OF THE KEY AS WELL AS IF ANY IAM ARNS FROM THE DESTINATION ACCOUNT OR THE DESTINATION ACCOUNT ID>
+  DisplayName: Prod-RDSCustomerKey
+  ParentSNSStack: !stack_output prod/sns/snstopics.yaml::StackName

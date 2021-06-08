@@ -1,0 +1,129 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description:
+  This template creates a S3 bucket with a normalised naming structure.
+  BUCKET_PURPOSE-CUSTOMER_NAME-REGION
+  BUCKET_PURPOSE, available options are keys, repo, assets.
+  CUSTOMER_NAME, used name across all aws resources.
+  REGION, mapped from aws region codes to commonly known region names (Eg, ap-southeast-2 > sydney)
+  All buckets use Server-Side Encryption with AWS KMS-Managed Keys (SSE-KMS)
+  S3 buckets have 'retain' deletion policy
+
+Parameters:
+  BucketDuty:
+    Type: String
+    Description: 'Select a bucket duty from the list (keys for ssh keys, repo for app code repo, assets for app assets)'
+
+  BucketEncryptionEnabled:
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: 'Select true to enable bucket encryption with the AWS KMS key'
+    Default: 'true'
+
+  NeedVersioning:
+    Description: Boolean to enable/suspend versioning on the bucket. Set this to true and set the below parameter to one of the values. If versioning need to disabled, set this false.
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Type: String
+
+  BucketVersioningEnabled:
+    Type: String
+    AllowedValues:
+      - 'Enabled'
+      - 'Suspended'
+    Description: 'Select Enabled to enable bucket versioning'
+    Default: 'Suspended'
+
+  ExpireObjects:
+    Description: Boolean to enable the lifecycle rule to delete objects in s3 which are 90 days old. Set it to false if rule not to be applied.
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Type: String
+
+Conditions:
+  BucketEncryptionEnabled: !Equals [!Ref BucketEncryptionEnabled, 'true']
+  NeedVersioning: !Equals [!Ref NeedVersioning, 'true']
+  NeedToExpireObjects: !Equals [!Ref ExpireObjects, 'true']
+
+Mappings:
+  SuffixRegion:
+    us-east-2:
+      RegionCommonName: 'ohio'
+    us-east-1:
+      RegionCommonName: 'nvirginia'
+    us-west-1:
+      RegionCommonName: 'ncalifornia'
+    us-west-2:
+      RegionCommonName: 'oregon'
+    ap-northeast-1:
+      RegionCommonName: 'tokyo'
+    ap-northeast-2:
+      RegionCommonName: 'seoul'
+    ap-south-1:
+      RegionCommonName: 'mumbai'
+    ap-southeast-1:
+      RegionCommonName: 'singapore'
+    ap-southeast-2:
+      RegionCommonName: 'sydney'
+    ca-central-1:
+      RegionCommonName: 'canada'
+    cn-north-1:
+      RegionCommonName: 'beijing'
+    cn-northwest-1:
+      RegionCommonName: 'ningxia'
+    eu-central-1:
+      RegionCommonName: 'frankfurt'
+    eu-west-1:
+      RegionCommonName: 'ireland'
+    eu-west-2:
+      RegionCommonName: 'london'
+    eu-west-3:
+      RegionCommonName: 'paris'
+    sa-east-1:
+      RegionCommonName: 'saopaulo'
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName:
+        !Join
+          - '-'
+          - - !Ref BucketDuty
+            - !FindInMap [SuffixRegion, !Ref "AWS::Region", RegionCommonName]
+      BucketEncryption:
+        !If
+        - BucketEncryptionEnabled
+        - ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: 'AES256'
+        - !Ref AWS::NoValue
+      VersioningConfiguration:
+        !If
+        - NeedVersioning
+        - Status: !Ref BucketVersioningEnabled
+        - !Ref AWS::NoValue
+      LifecycleConfiguration:
+       !If 
+       - NeedToExpireObjects
+       - Rules:
+         - Id: DeleteEverythingInThreeMonths
+           Prefix: ''
+           Status: Enabled
+           ExpirationInDays: '90'
+       - !Ref AWS::NoValue
+
+Outputs:
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
+  BucketName:
+    Description: 'Bucket name'
+    Value: !Ref 'S3Bucket'
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'

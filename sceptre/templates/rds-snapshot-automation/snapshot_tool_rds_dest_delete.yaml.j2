@@ -1,0 +1,325 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template deploys the necessary AWS Resources inorder to automate deleting the copied manual snapshots periodically from the destination AWS account when it reaches certain age.
+
+Parameters:
+
+  Platform:
+    Description: Application Name for tagging purpose.
+    Type: String
+
+  SnapshotPattern:
+    Type: String
+    Default: ALL_SNAPSHOTS
+    Description: Python regex for matching instance names to backup. Use "ALL_SNAPSHOTS" to back up every RDS instance in the region.
+
+  DeleteOldSchedule:
+    Type: String
+    Description: DeleteOld schedule in Cloudwatch Event cron format. Needs to run at least once for every Interval.
+
+  RetentionDays:
+    Type: Number
+    Default: '7'
+    Description: Number of days to keep snapshots in retention before deleting them
+
+  DestinationRegion:
+    Type: String
+    Description: Destination region for snapshots.
+    Default: ap-southeast-2
+
+  LogLevel:
+    Type: String
+    Default: ERROR
+    Description: Log level for Lambda functions (DEBUG, INFO, WARN, ERROR, CRITICAL are valid values).
+
+  LambdaCWLogRetention:
+    Type: Number
+    Default: '7'
+    Description: Number of days to retain logs from the lambda functions in CloudWatch Logs
+
+  SourceRegionOverride:
+    Type: String
+    Default: 'NO'
+    Description: Set to the region where your RDS instances run, only if such region does not support Step Functions. Leave as NO otherwise
+
+  DeleteOldSnapshots:
+    Type: String
+    Default: 'true'
+    Description: Set to TRUE to enable deletion of snapshot based on RetentionDays. Set to FALSE to disable
+    AllowedValues:
+    - 'true'
+    - 'false'
+
+  ParentSNSStack:
+    Description: SNS Topic ARN to send notifications to
+    Type: String  
+
+Conditions:
+
+  DeleteOld:
+    Fn::Equals:
+    - Ref: DeleteOldSnapshots
+    - 'true'
+
+Resources:
+
+# CloudWatch Alarms Resources for Step Functions
+
+  alarmcwDeleteOldFailedDest:
+    Type: AWS::CloudWatch::Alarm
+    Condition: DeleteOld
+    Properties:
+      AlarmDescription: !Sub "Alarm to be triggered if the Delete Old Step Function has failed for the ${Platform} RDS"
+      ActionsEnabled: 'true'
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: '2'
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Period: '3600'
+      Statistic: Sum
+      Threshold: '2.0'
+      AlarmActions:
+        - 'Fn::ImportValue': !Sub '${ParentSNSStack}-AlertsTopicArn'
+      Dimensions:
+      - Name: StateMachineArn
+        Value:
+          Ref: statemachineDeleteOldSnapshotsDestRDS
+
+# Lamabda Resources
+
+# Lambda Execution IAM Role
+
+  iamroleSnapshotsRDS:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: inline_policy_snapshots_rds_cw_logs
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+      - PolicyName: inline_policy_snapshots_rds
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - rds:CreateDBSnapshot
+            - rds:DeleteDBSnapshot
+            - rds:DescribeDBInstances
+            - rds:DescribeDBSnapshots
+            - rds:ModifyDBSnapshotAttribute
+            - rds:DescribeDBSnapshotAttributes
+            - rds:CopyDBSnapshot
+            - rds:ListTagsForResource
+            - rds:AddTagsToResource
+            Resource: "*"
+      - PolicyName: inline_policy_snapshot_rds_kms_access
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Sid: AllowUseOfTheKey
+            Effect: Allow
+            Action:
+            - kms:Encrypt
+            - kms:Decrypt
+            - kms:ReEncrypt*
+            - kms:GenerateDataKey*
+            - kms:DescribeKey
+            Resource:
+            - "*"
+          - Sid: AllowAttachmentOfPersistentResources
+            Effect: Allow
+            Action:
+            - kms:CreateGrant
+            - kms:ListGrants
+            - kms:RevokeGrant
+            Resource:
+            - "*"
+            Condition:
+              Bool:
+                kms:GrantIsForAWSResource: true
+
+# Lambda Functions
+
+  lambdaDeleteOldDestRDS:
+    Type: AWS::Lambda::Function
+    Condition: DeleteOld
+    Properties:
+      Code:
+        S3Bucket: {{ sceptre_user_data.Code.S3Bucket }}
+        S3Key: {{ sceptre_user_data.Code.S3Key }}
+      MemorySize: 512
+      Description: 'This function enforces retention on the snapshots shared with the destination account. '
+      Environment:
+        Variables:
+          SNAPSHOT_PATTERN:
+            Ref: SnapshotPattern
+          DEST_REGION:
+            Ref: DestinationRegion
+          RETENTION_DAYS:
+            Ref: RetentionDays
+          LOG_LEVEL:
+            Ref: LogLevel
+          PLATFORM:
+            Ref: Platform  
+      Role:
+        Fn::GetAtt:
+        - iamroleSnapshotsRDS
+        - Arn
+      Runtime: python3.7
+      Handler: lambda_function.lambda_handler
+      Timeout: 300
+
+# Lambda Functions CloudWatch Log Groups
+
+  cwloggroupDeleteOldSnapshotsDestRDS:
+    Type: AWS::Logs::LogGroup
+    Description: "Log group for the lambdaDeleteOldDestRDS function logs"
+    Condition: DeleteOld
+    DependsOn: lambdaDeleteOldDestRDS
+    Properties:
+      RetentionInDays:
+        Ref: LambdaCWLogRetention
+      LogGroupName:
+        Fn::Sub:
+        - "/aws/lambda/${func}"
+        - func:
+            Ref: lambdaDeleteOldDestRDS
+
+# Step Functions Resources
+
+# Step Functin Execution Role
+
+  iamroleStateExecution:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              Fn::Join:
+              - ''
+              - - states.
+                - Ref: AWS::Region
+                - ".amazonaws.com"
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: inline_policy_rds_snapshot
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            Resource: "*"
+
+# Step Functions
+
+  statemachineDeleteOldSnapshotsDestRDS:
+    Type: AWS::StepFunctions::StateMachine
+    Condition: DeleteOld
+    Properties:
+      DefinitionString:
+        Fn::Join:
+        - ''
+        - - Fn::Join:
+            - "\n"
+            - - ' {"Comment":"DeleteOld for RDS snapshots in destination region",'
+              - ' "StartAt":"DeleteOldDestRegion",'
+              - ' "States":{'
+              - '   "DeleteOldDestRegion":{'
+              - '     "Type":"Task",'
+              - '     "Resource": '
+          - "\""
+          - Fn::GetAtt:
+            - lambdaDeleteOldDestRDS
+            - Arn
+          - |-
+            "
+            ,
+          - Fn::Join:
+            - "\n"
+            - - '     "Retry":['
+              - "       {"
+              - '       "ErrorEquals":[ '
+              - '         "SnapshotToolException"'
+              - "       ],"
+              - '       "IntervalSeconds":600,'
+              - '       "MaxAttempts":5,'
+              - '       "BackoffRate":1'
+              - "     },"
+              - "     {"
+              - '      "ErrorEquals":[ '
+              - '         "States.ALL"], '
+              - '         "IntervalSeconds": 30,'
+              - '         "MaxAttempts": 20,'
+              - '         "BackoffRate": 1'
+              - "    }"
+              - "    ],"
+              - '    "End": true '
+              - "   }"
+              - " }}"
+      RoleArn:
+        Fn::GetAtt:
+        - iamroleStateExecution
+        - Arn
+
+# Step Function IAM Role for CloudWatch Events
+
+  iamroleStepInvocation:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: events.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: inline_policy_state_invocation
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - states:StartExecution
+            Resource: "*"
+
+# CloudWatch Events Rule for triggering the Step Functions
+
+  cwEventDeleteOldSnapshotsRDS:
+    Type: AWS::Events::Rule
+    Condition: DeleteOld
+    Properties:
+      Description: !Sub "Triggers the DeleteOldSnapshotsRDS state machine for ${Platform} RDS instance"
+      ScheduleExpression:
+        Fn::Join:
+        - ''
+        - - cron(
+          - !Ref DeleteOldSchedule
+          - ")"
+      State: ENABLED
+      Targets:
+      - Arn:
+          Ref: statemachineDeleteOldSnapshotsDestRDS
+        Id: Target1
+        RoleArn:
+          Fn::GetAtt:
+          - iamroleStepInvocation
+          - Arn

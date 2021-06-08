@@ -1,0 +1,44 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description:
+  SNS Topics for alerts and events
+
+Parameters:
+
+  AlertsEmail:
+    Type: String
+    Description: Email address for alerts
+
+Conditions:
+  HasAlertsEmail: !Not [!Equals [!Ref AlertsEmail, '']]
+
+Resources:
+
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: Alerts SNS Topic
+      Subscription:
+            - !If
+              - HasAlertsEmail
+              -
+                Endpoint: !Ref AlertsEmail
+                Protocol: email
+              - !Ref AWS::NoValue
+
+Outputs:
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
+
+  AlertsTopic:
+    Description: 'Alerts arn'
+    Value: !Ref AlertsTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-AlertsTopicArn'
+
+  AlertsTopicName:
+    Description: 'Alerts Name'
+    Value: !GetAtt AlertsTopic.TopicName
+    Export:
+      Name: !Sub '${AWS::StackName}-AlertsTopicName'

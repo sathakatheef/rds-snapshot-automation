@@ -1,0 +1,22 @@
+template_path: rds-snapshot-automation/snapshot_tool_rds_dest_delete.yaml.j2
+
+hooks:
+  before_create:
+    - !sceptre_s3_upload lambda_code/delete_old_snapshots_dest_rds
+  before_update:
+    - !sceptre_s3_upload lambda_code/delete_old_snapshots_dest_rds
+
+parameters:
+  Platform: exampleApp        ## <PASS APPLICATION NAME HERE TO PROVISION APPLICAITON BASED RESOURCES >
+  SnapshotPattern: "prod"    ## <PASS NAME OF THE SHARED SNAPSHOT AS A REGULAR EXPRESSION TO TARGET THE AVAILABLE SNAPSHOTS TO BE COPIED. IN MOST CASES, A SIMPLE NAME LIKE 'prod', 'dev', 'uat' or ANY ENVIRONMENT NAMES LIKE THESE WILL SUFFICE>
+  DeleteOldSchedule: '00 10 ? * MON-FRI *'
+  RetentionDays: '1'
+  LogLevel: 'INFO'
+  DeleteOldSnapshots: 'true'
+  ParentSNSStack:
+    !stack_output "drprod/sns/snstopics.yaml::StackName"
+
+sceptre_user_data:
+  Code:
+    S3Bucket: !stack_output "drprod/s3/sceptre-function-code-bucket.yaml::BucketName"
+    S3Key: !sceptre_s3_key lambda_code/delete_old_snapshots_dest_rds

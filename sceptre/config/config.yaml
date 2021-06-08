@@ -1,0 +1,5 @@
+## This config file file holds all common configurations to be passed across all environment and all AWS accounts (if stacks to be provisioned across multiple accounts)
+
+project_code: rds-snapshot-auto ## REQUIRED: A string which is prepended to the Stack names of all Stacks built by Sceptre. https://sceptre.cloudreach.com/2.3.0/docs/stack_group_config.html#project-code
+region: ap-southeast-2          ## REQUIRED: The AWS region to build Stacks in. https://sceptre.cloudreach.com/2.3.0/docs/stack_group_config.html#region
+region_common_name: sydney

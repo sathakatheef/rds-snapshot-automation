@@ -1,0 +1,21 @@
+template_path: rds-snapshot-automation/snapshot_tool_rds_source_backup.yaml.j2
+
+hooks:
+  before_create:
+    - !sceptre_s3_upload lambda_code/take_snapshots_rds
+  before_update:
+    - !sceptre_s3_upload lambda_code/take_snapshots_rds
+
+parameters:
+  Platform: exampleApp            ## <PASS APPLICATION NAME HERE TO PROVISION APPLICAITON BASED RESOURCES >
+  InstanceNamePattern: "prod"    ## <PASS EXACT NAME OF THE SOURCE RDS INSTANCE TO TARGET ONE INSTANCE OR AS A REGULAR EXPRESSION TO TARGET MULTIPLE SOURCE RDS INSTANCE. IN MOST CASES, A SIMPLE NAME LIKE 'prod', 'dev', 'uat' or ANY ENVIRONMENT NAMES LIKE THESE WILL SUFFICE>
+  BackupInterval: '1'
+  BackupSchedule: '60'
+  LogLevel: 'INFO'
+  ParentSNSStack:
+    !stack_output "prod/sns/snstopics.yaml::StackName"
+
+sceptre_user_data:
+  Code:
+    S3Bucket: !stack_output "prod/s3/sceptre-function-code-bucket.yaml::BucketName"
+    S3Key: !sceptre_s3_key lambda_code/take_snapshots_rds

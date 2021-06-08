@@ -1,0 +1,31 @@
+# logs
+*.log
+
+# SSH Keys
+#*.pem
+*.pub
+
+# Backup files
+*.bak
+
+# Ignored Terraform files
+*gitignore*.tf
+
+# Ignore Mac .DS_Store files
+.DS_Store
+
+# Ignored vscode files
+.vscode/
+
+# Ignore plan
+*.plan
+
+# Ignore
+.idea
+
+# Ignore tests directory
+tests/*
+# Misc files to ignore
+*.zip
+*.tar.gz
+*.fav.gz
