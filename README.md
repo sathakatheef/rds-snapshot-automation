@@ -3,7 +3,7 @@ A solution to provide AWS RDS snapshotting automation using sceptre and CloudFor
 
 ## **Solution overview**
 
-The solution leverages Infrastructure as Code, IaC, to provision all resources unless mentioned otherwise. It includes CI/CD Pipelines to automate and streamline application deployments. The solution is been inspired from [Snapshot Tool for Amazon RDS](https://github.com/awslabs/rds-snapshot-tool) solution.
+The solution leverages Infrastructure as Code, IaC, to provision all resources unless mentioned otherwise. The solution can also be included in CI/CD Pipelines to automate and streamline application deployments. The solution is been inspired from [Snapshot Tool for Amazon RDS](https://github.com/awslabs/rds-snapshot-tool) solution.
 
 The solution caters to adopt a multi-account strategy that will isolate important business functions such as billing, access, and applications. This will increase security and resilience of the environment and ensure the ability to recover in a disaster scenario. The scope of this DR solution is to obtain a **Recovery Point Objective** (RPO) of **1Hour** and **Recovery Time Objective** (RTO) of **3Hours** under the disaster scenarios of **Account compromise** and **Data Change/Corruption**.
 
